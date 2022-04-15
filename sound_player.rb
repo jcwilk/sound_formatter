@@ -6,6 +6,9 @@ require 'rubygems'
 require 'open3'
 require 'irb'
 
+JSON_START = "↦"
+JSON_END = "↤"
+
 # start simple,
 # each function expects the time index in seconds and returns the corresponding wave value
 
@@ -14,30 +17,20 @@ SAMPLE_RATE = 41_000 # samples per second
 # so changing this value will pitch-shift any existing song scripts
 # Still haven't decided if I want to make everything run on seconds or not...
 # Seems like it's a missed opportunity to not calculate based on the exact sample integer,
-# even if it's almost always converted to a float right away
-
-BATCH_LENGTH = 0.1 # size of batch of samples to stream to sox, specified in seconds
-
-NEXT_BATCH_HEAD_START = 0.4 # start processing this many seconds ahead of the next batch delivery time
-# NB: setting this to lower than 0.2 causes ALSA underrun errors
-# Basically I think some part of the pipeline is buffering too much and ALSA is running out of sound to play
-# Using this to keep a buffer of 0.2s forward loaded in the pipeline keeps ALSA happy
+# even if it's almost always converted to a float right awaypipeline keeps ALSA happy
 
 FADE_FILTER_LENGTH = SAMPLE_RATE * 0.1 # samples (here in seconds) to fade in/out on every sound to avoid clicks
 # NB: Not currently used, it's quite difficult to anticipate the end of a set of sounds efficiently
 
-LINGER_TIMEOUT = 3.0 # seconds before the play thread self-immolates after the last sound it's played
-# The first sound in a thread always has near zero latency, subsequent ones have latency based on NEXT_BATCH_HEAD_START and BATCH_LENGTH
-# Set this lower for better average latency
-# Set this higher for longer lived threads
-
-MAX_CONCURRENT_SOUNDS = 10 # it runs the first X sounds in the queue and ignores the rest
-
-MAX_THREAD_DURATION = 10.0 # number of seconds before a play thread stops taking in new sounds
-# NB: this is only how long it pulls in new sounds for, it will continue to play sounds it has until they run out
-# so it always lasts a bit longer than the duration depending on sound length
+MAX_CONCURRENT_SOUNDS = 10 # it runs the first X sounds in the queue and the rest have to wait
 
 AUTO_FADE_DURATION = 0.02
+
+MAX_BUFFER_SIZE = 0.1
+
+SAMPLES_PER_START = 0.07 * SAMPLE_RATE
+
+REVERB_DELAY = 0.4
 
 def square(sample)
   amplitude = 0.05
@@ -52,7 +45,7 @@ def square(sample)
 end
 
 def sin(sample)
-  amplitude = 0.1
+  amplitude = 0.07
   frequency = 1000
 
   Math.sin((sample * frequency * 2).to_f * Math::PI / SAMPLE_RATE ) * amplitude
@@ -94,6 +87,122 @@ def fade_out(sample, max_sample, length)
   end
 end
 
+class SoundStream
+  def initialize
+    args = %w[play -q -t raw -b 32 -r] + [SAMPLE_RATE.to_s] + %w[-c 1 -e floating-point --endian little - -t alsa]
+    @stdin, @stdout, _wait_thr = Open3.popen2(*args)
+    @samples_written = 0
+    @started_at = Time.now
+  end
+
+  def close
+    stdin.close
+    stdout.close
+  end
+
+  def buffer_time_debt
+    MAX_BUFFER_SIZE + (Time.now - started_at).to_f - samples_written / SAMPLE_RATE
+  end
+
+  def play(buffer)
+    buffer.map! { |sample| sample.clamp(-1,1) }
+
+    stdin.print buffer.pack('e*')
+    stdin.flush
+
+    @samples_written += buffer.size
+  end
+
+  private
+
+  attr_reader :samples_written, :started_at, :stdin, :stdout
+end
+
+class Channel
+  def initialize
+    @sound_stream = SoundStream.new
+    @queued_blocks = []
+    @active_blocks = []
+    @samples_until_next = SAMPLES_PER_START
+    @tape_loop = TapeLoop.new
+  end
+
+  def play(sound_block)
+    # if full?
+      queued_blocks << sound_block
+    # else
+    #   active_blocks << sound_block
+    # end
+  end
+
+  def fill_buffer
+    #seconds_needed = [sound_stream.buffer_time_debt,MAX_BUFFER_SIZE].min
+    # TODO: Something's screwed up here, if you give it too high a buffer then it works great, but the above line makes it sound like garbage
+    seconds_needed = MAX_BUFFER_SIZE
+
+    return if seconds_needed <= 0
+
+    batch = (seconds_needed * SAMPLE_RATE).to_i.times.map do |i|
+      if @samples_until_next < i && pending? && !full?
+        active_blocks.push(queued_blocks.pop)
+        @samples_until_next = i + gaus(SAMPLES_PER_START, SAMPLES_PER_START/2)
+      end
+
+      active_blocks.reduce(0) do |acc, el|
+        block_index = el[2] + i
+        if block_index < el[1]
+          acc + el[0].call(block_index)
+        else
+          acc
+        end
+      end
+    end
+
+    @samples_until_next -= batch.size
+
+    batch = tape_loop.play(batch)
+
+    sound_stream.play(batch)
+
+    active_blocks.each { |el| el[2] += batch.size }
+    active_blocks.select! { |_, max, processed| processed < max }
+  end
+
+  def active?
+    !active_blocks.empty? || pending?
+  end
+
+  private
+
+  attr_reader :active_blocks, :queued_blocks, :sound_stream, :tape_loop
+
+  def pending?
+    !queued_blocks.empty?
+  end
+
+  def full?
+    slots_left == 0
+  end
+
+  def slots_left
+    MAX_CONCURRENT_SOUNDS - active_blocks.size
+  end
+end
+
+class TapeLoop
+  def initialize
+    @loop = [0.0] * (REVERB_DELAY * SAMPLE_RATE).to_i
+    @index = 0
+  end
+
+  def play(input_buffer)
+    (0...input_buffer.size).map do |i|
+      loop_i = i % @loop.size
+      @loop[loop_i] = @loop[loop_i] * 0.5 + input_buffer[i]
+    end
+  end
+end
+
 # def filter(value)
 #   # TODO - if there's any popping at the beginning/end then re-implement a quick fade at the beginning and end
 
@@ -106,14 +215,11 @@ end
 #   end.clamp(-1,1)
 # end
 
-$play_blocks_semaphore = Mutex.new
-$play_thread_semaphore = Mutex.new
-$play_blocks = Queue.new # array of arrays with each sub array being [&block, total_samples, processed_samples]
-$play_thread = nil
-$failures = Queue.new
 $last_failure_at = Time.now
 
 $any_noises_yet = false
+
+$channel = Channel.new
 
 def play(duration = 1, &block)
   if !$any_noises_yet
@@ -123,109 +229,10 @@ def play(duration = 1, &block)
   end
 
   total_samples = duration * SAMPLE_RATE
-  fade_duration = AUTO_FADE_DURATION * SAMPLE_RATE
-  faded_sound = Proc.new { |s| fade_in(s, fade_duration) * fade_out(s, total_samples, fade_duration) * block.call(s) }
+  fade_samples = AUTO_FADE_DURATION * SAMPLE_RATE
+  faded_sound = Proc.new { |s| fade_in(s, fade_samples) * fade_out(s, total_samples, fade_samples) * block.call(s) }
 
-  $play_blocks.push([faded_sound, total_samples, 0])
-
-  $play_thread_semaphore.synchronize do
-    if $play_thread.nil? || !$play_thread.alive?
-      $play_thread = start_play_thread
-    end
-  end
-end
-
-def start_play_thread
-  Thread.new do
-    current_blocks = [] # run with empty blocks at first to prime the buffer
-    is_primary = true
-
-    args = %w[play -q -t raw -b 32 -r] + [SAMPLE_RATE.to_s] + %w[-c 1 -e floating-point --endian little - -t alsa]
-    Open3.popen2(*args) do |stdin, stdout, status|
-      samples_per_batch = (SAMPLE_RATE.to_f * BATCH_LENGTH).ceil
-      start = Time.now
-      batches_written = 0
-      keep_running = true
-      linger_remaining = LINGER_TIMEOUT
-      has_slept = false
-
-      reverb_delay = 0.18
-      reverb_sample_count = reverb_delay*SAMPLE_RATE
-      reverb = [0]*reverb_sample_count
-      reverb_index = 0
-      reverb_fade_in = SAMPLE_RATE * 100
-
-      while true
-        batch = []
-        samples_per_batch.times do |i|
-          val = 0
-          current_blocks.each do |el|
-            if el[2] + i < el[1]
-              val += el[0].call(el[2] + i)
-            end
-          end
-
-          val += reverb[reverb_index]
-
-          val = val.clamp(-1,1)
-
-          batch << val
-          reverb << val * 0.7 * fade_in(Time.now - $last_failure_at, 500)
-
-          reverb_index+= 1
-        end
-        stdin.print batch.pack('e*')
-        stdin.flush
-        batches_written += 1
-
-        current_blocks.each { |el| el[2] += samples_per_batch }
-
-        if is_primary && !$failures.empty?
-          while(!$failures.empty? && $failures.pop) do; end
-          $last_failure_at = Time.now
-        end
-
-        end_of_batch_timing = start + (batches_written * samples_per_batch).to_f / SAMPLE_RATE
-        start_next_batch_by = end_of_batch_timing - NEXT_BATCH_HEAD_START
-
-        sleep_for = start_next_batch_by - Time.now
-        if sleep_for > 0
-          has_slept = true
-          sleep (sleep_for)
-        end
-
-        current_blocks.reject! { |_, total_samples, processed_samples| processed_samples >= total_samples }
-
-        if Time.now - start > MAX_THREAD_DURATION && is_primary
-          is_primary = false
-          $play_thread_semaphore.synchronize do
-            $play_thread = nil
-          end
-        end
-
-        if is_primary && has_slept && !$play_blocks.empty?
-          while current_blocks.length < MAX_CONCURRENT_SOUNDS && !$play_blocks.empty? do
-            current_blocks.push($play_blocks.shift)
-          end
-        end
-
-        if current_blocks.any?
-          linger_remaining = LINGER_TIMEOUT
-        elsif (linger_remaining -= BATCH_LENGTH) <= 0
-          # puts "killing"
-          # STDOUT.flush
-          if is_primary
-            $play_thread_semaphore.synchronize do
-              $play_thread = nil # NB: for some reason this is necessary to avoid closing it on freshly added blocks
-            end
-            # It's awkward to reproduce though, need to start filling out some kind of test harness to check it in extreme scenarios
-            # Update - My guess is there's a delay between exiting out of a sync and a thread registering as dead
-          end
-          Thread.exit
-        end
-      end
-    end
-  end
+  $channel.play([faded_sound, total_samples, 0])
 end
 
 def white(str)
@@ -318,25 +325,81 @@ end
 # TODO - make everything (except show) operate in seconds, samples is too confusing and brittle
 # TODO - reverb with variable delay and feedback
 
+def get_characters
+  begin
+    ARGF.read_nonblock(16).encode(Encoding::UTF_8, Encoding::UTF_8)
+  rescue IO::EAGAINWaitReadable
+    #retry
+    ""
+  end
+end
+
+def fill_buffer_until_empty
+  while ($channel.active?) do
+    puts "filling"
+    $channel.fill_buffer
+  end
+end
+
+# A good spot for scratch space - this will run before the console loads
+
+# 5.times do
+#   r=gaus(0.0,0.025)
+#   play (0.3) { |t| sin(t**1.1+3*(t)**(1.01 + r)) }
+# end
+
+# puts $channel.active?.inspect
+
+# fill_buffer_until_empty
+
 if ARGV[0] == "c"
   binding.irb
 elsif ARGV.empty?
   # TODO: need to change this to not block while it's waiting for more characters so we can continue processing samples in the same thread.
   # If we do this then we can get rid of the last bits of threading code and keep it all single-thread. May or may not be able to keep up in that form though...
-  ARGF.each_char do |c|
-    case c
-    when '·'
-      r=gaus(0.0,0.025)
-      play (0.2) { |t| sin(t**1.1+3*(t)**(1.01 + r)) }
-    when '¤'
-      r=gaus(0.0,0.03)
-      play (0.5) { |t| saw(16.0*t.to_f**(0.8 + r + t.to_f / SAMPLE_RATE / 20)) }
-    when 'ƒ'
-      $failures.push(true)
-      r=gaus(0.0,0.03)
-      play (2) { |t| square(t.to_f**0.78 - 200 * Math.sin(t.to_f**(0.5 + r) * 2000 / SAMPLE_RATE * Math::PI)) }
+
+  tracker = {}
+
+  json_buffer = ""
+  reading_json = false
+
+  while(true) do
+    get_characters.each_char do |c|
+      if reading_json
+        if c == JSON_END
+          reading_json = false
+          process_json(json_buffer)
+        else
+          json_buffer+= c
+        end
+        next
+      end
+
+      if c == JSON_START
+        reading_json = true
+        json_buffer = ""
+        next
+      end
+
+      case c
+      when '·'
+        r=gaus(0.0,0.025)
+        play (0.2) { |t| sin(t**1.1+3*(t)**(1.01 + r)) }
+      when '¤'
+        r=gaus(0.0,0.03)
+        play (0.5) { |t| saw(16.0*t.to_f**(0.8 + r + t.to_f / SAMPLE_RATE / 20)) }
+      when 'ƒ'
+        $failures.push(true)
+        r=gaus(0.0,0.03)
+        play (2) { |t| square(t.to_f**0.78 - 200 * Math.sin(t.to_f**(0.5 + r) * 2000 / SAMPLE_RATE * Math::PI)) }
+      else
+        #puts c.bytes.inspect
+        #next
+      end
+      print c
     end
-    print c
+
+    $channel.fill_buffer
   end
 else
   raise "Invalid arguments #{ARGV.inspect}"

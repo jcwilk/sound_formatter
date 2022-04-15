@@ -5,6 +5,10 @@ require "rspec/core/formatters/base_text_formatter"
 class SoundFormatter < RSpec::Core::Formatters::BaseTextFormatter
   RSpec::Core::Formatters.register self, :example_passed, :example_pending, :example_failed, :start_dump
 
+  JSON_START = "↦"
+  JSON_END = "↤"
+  # Outputting JSON like this: ↦{a: 1}↤ will get parsed by `sound_player.rb` if you want to send more detailed events
+
   def example_passed(_notification)
     output.print RSpec::Core::Formatters::ConsoleCodes.wrap('·', :success)
   end
@@ -17,7 +21,5 @@ class SoundFormatter < RSpec::Core::Formatters::BaseTextFormatter
     output.print RSpec::Core::Formatters::ConsoleCodes.wrap('ƒ', :failure)
   end
 
-  def start_dump(_notification)
-    output.puts
-  end
+
 end
