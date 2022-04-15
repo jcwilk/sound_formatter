@@ -1,8 +1,6 @@
 #!/usr/bin/env ruby
 
 require 'rubygems'
-#require 'bundler/setup'
-#Bundler.require(:default)
 require 'open3'
 require 'irb'
 
@@ -355,9 +353,6 @@ end
 if ARGV[0] == "c"
   binding.irb
 elsif ARGV.empty?
-  # TODO: need to change this to not block while it's waiting for more characters so we can continue processing samples in the same thread.
-  # If we do this then we can get rid of the last bits of threading code and keep it all single-thread. May or may not be able to keep up in that form though...
-
   tracker = {}
 
   json_buffer = ""
