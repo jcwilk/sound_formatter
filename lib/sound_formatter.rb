@@ -20,6 +20,4 @@ class SoundFormatter < RSpec::Core::Formatters::BaseTextFormatter
   def example_failed(_notification)
     output.print RSpec::Core::Formatters::ConsoleCodes.wrap('ƒ', :failure)
   end
-
-
 end

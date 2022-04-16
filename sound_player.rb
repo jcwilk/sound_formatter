@@ -3,6 +3,8 @@
 require 'rubygems'
 require 'open3'
 require 'irb'
+require 'securerandom'
+require 'benchmark'
 
 JSON_START = "↦"
 JSON_END = "↤"
@@ -24,11 +26,13 @@ MAX_CONCURRENT_SOUNDS = 10 # it runs the first X sounds in the queue and the res
 
 AUTO_FADE_DURATION = 0.02
 
-MAX_BUFFER_SIZE = 0.1
+MAX_BUFFER_SIZE = 0.3
 
 SAMPLES_PER_START = 0.07 * SAMPLE_RATE
 
-REVERB_DELAY = 0.4
+REVERB_DELAY = 0.2
+
+MAX_SAMPLES_PER_BATCH = 2000
 
 def square(sample)
   amplitude = 0.05
@@ -85,6 +89,124 @@ def fade_out(sample, max_sample, length)
   end
 end
 
+class ForwardOnlyEnumerator
+  include Enumerable
+
+  def initialize(enumerator)
+    @enum = enumerator
+  end
+
+  def each
+    if block_given?
+      loop do
+        yield @enum.next
+      end
+    else
+      enum_for(:each)
+    end
+  end
+end
+
+class SoundEnumerator
+  include Enumerable
+
+  def initialize(duration, &block)
+    step = 1.0 / SAMPLE_RATE
+    sample_count = (duration * SAMPLE_RATE).floor
+    @raw_enum = 0.0.step(by: step).lazy.map(&block).take(sample_count)
+  end
+
+  def play
+    enum = @raw_enum.eager
+
+    return enum unless block_given?
+
+    enum.each { |sample| yield sample }
+  end
+end
+
+class SoundSplicer
+  def initialize
+    @active_enumerators_store = {}
+  end
+
+  def add(enumerator)
+    uuid = SecureRandom.uuid
+    active_enumerators_store[uuid] = enumerator.chain(Enumerator.new do
+      active_enumerators_store.delete(uuid)
+    end).chain(0.0.step(by: 0)).each
+  end
+
+  def play
+    if block_given?
+      while(!active_enumerators.empty?) do
+        yield active_enumerators.sum(&:next)
+      end
+    else
+      enum_for(:play)
+    end
+  end
+
+  def active_enumerators
+    active_enumerators_store.values
+  end
+
+  private
+
+  attr_reader :active_enumerators_store
+end
+
+class TapeLoop
+  def initialize
+    @loop = [0.0] * (REVERB_DELAY * SAMPLE_RATE).to_i
+    @index = 0
+  end
+
+  def play
+    if block_given?
+      loop do
+        @index = (@index + 1) % @loop.size
+        yield @loop[@index]
+      end
+    else
+      enum_for(:play)
+    end
+  end
+
+  def write(sample)
+    @loop[@index] = sample * 0.7
+  end
+end
+
+class Channel
+  include Enumerable
+
+  def initialize
+    @splicer = SoundSplicer.new
+    @tape_loop = TapeLoop.new
+    add(tape_loop)
+    @splicer_enum = splicer.play
+  end
+
+  def add(playable)
+    splicer.add(playable.play)
+  end
+
+  def play
+    if block_given?
+      loop do
+        yield @splicer_enum.next.tap { |sample| tape_loop.write(sample) }
+      end
+    else
+      enum_for(:play)
+    end
+  end
+
+  private
+
+  attr_reader :splicer, :tape_loop
+end
+
 class SoundStream
   def initialize
     args = %w[play -q -t raw -b 32 -r] + [SAMPLE_RATE.to_s] + %w[-c 1 -e floating-point --endian little - -t alsa]
@@ -98,12 +220,26 @@ class SoundStream
     stdout.close
   end
 
-  def buffer_time_debt
-    MAX_BUFFER_SIZE + (Time.now - started_at).to_f - samples_written / SAMPLE_RATE
+  def buffer_sample_debt
+    elapsed_time = (Time.now - started_at).to_f
+    elapsed_samples = (elapsed_time * SAMPLE_RATE).ceil
+    extra_samples = (MAX_BUFFER_SIZE * SAMPLE_RATE).ceil
+
+    elapsed_samples + extra_samples - samples_written
   end
 
-  def play(buffer)
-    buffer.map! { |sample| sample.clamp(-1,1) }
+  def play(enum)
+    buffer = nil
+    debt = buffer_sample_debt
+    buffer_size = [debt,MAX_SAMPLES_PER_BATCH].min
+    # bm = Benchmark.measure do
+      buffer = enum.lazy.map { |sample| sample.clamp(-1,1) }.first(buffer_size)
+    # end
+
+    # puts ""
+    # puts(buffer.size / bm.real)
+    # puts buffer.size
+    # puts debt
 
     stdin.print buffer.pack('e*')
     stdin.flush
@@ -116,121 +252,20 @@ class SoundStream
   attr_reader :samples_written, :started_at, :stdin, :stdout
 end
 
-class Channel
-  def initialize
-    @sound_stream = SoundStream.new
-    @queued_blocks = []
-    @active_blocks = []
-    @samples_until_next = SAMPLES_PER_START
-    @tape_loop = TapeLoop.new
-  end
-
-  def play(sound_block)
-    # if full?
-      queued_blocks << sound_block
-    # else
-    #   active_blocks << sound_block
-    # end
-  end
-
-  def fill_buffer
-    #seconds_needed = [sound_stream.buffer_time_debt,MAX_BUFFER_SIZE].min
-    # TODO: Something's screwed up here, if you give it too high a buffer then it works great, but the above line makes it sound like garbage
-    seconds_needed = MAX_BUFFER_SIZE
-
-    return if seconds_needed <= 0
-
-    batch = (seconds_needed * SAMPLE_RATE).to_i.times.map do |i|
-      if @samples_until_next < i && pending? && !full?
-        active_blocks.push(queued_blocks.pop)
-        @samples_until_next = i + gaus(SAMPLES_PER_START, SAMPLES_PER_START/2)
-      end
-
-      active_blocks.reduce(0) do |acc, el|
-        block_index = el[2] + i
-        if block_index < el[1]
-          acc + el[0].call(block_index)
-        else
-          acc
-        end
-      end
-    end
-
-    @samples_until_next -= batch.size
-
-    batch = tape_loop.play(batch)
-
-    sound_stream.play(batch)
-
-    active_blocks.each { |el| el[2] += batch.size }
-    active_blocks.select! { |_, max, processed| processed < max }
-  end
-
-  def active?
-    !active_blocks.empty? || pending?
-  end
-
-  private
-
-  attr_reader :active_blocks, :queued_blocks, :sound_stream, :tape_loop
-
-  def pending?
-    !queued_blocks.empty?
-  end
-
-  def full?
-    slots_left == 0
-  end
-
-  def slots_left
-    MAX_CONCURRENT_SOUNDS - active_blocks.size
-  end
-end
-
-class TapeLoop
-  def initialize
-    @loop = [0.0] * (REVERB_DELAY * SAMPLE_RATE).to_i
-    @index = 0
-  end
-
-  def play(input_buffer)
-    (0...input_buffer.size).map do |i|
-      loop_i = i % @loop.size
-      @loop[loop_i] = @loop[loop_i] * 0.5 + input_buffer[i]
-    end
-  end
-end
-
-# def filter(value)
-#   # TODO - if there's any popping at the beginning/end then re-implement a quick fade at the beginning and end
-
-#   if sample < FADE_FILTER_LENGTH
-#     value.to_f * fade_in(sample, FADE_FILTER_LENGTH)
-#   elsif remaining < FADE_FILTER_LENGTH
-#     value.to_f * fade_in(remaining, FADE_FILTER_LENGTH)
-#   else
-#     value
-#   end.clamp(-1,1)
-# end
-
 $last_failure_at = Time.now
 
 $any_noises_yet = false
 
 $channel = Channel.new
+$sound_stream = SoundStream.new
+
+# for legacy sound equations because I'm too lazy to convert them to be based on seconds rather than sample index
+def play_samples(duration = 1, &block)
+  play(duration) { |seconds| block.call((seconds.to_f * SAMPLE_RATE).floor) }
+end
 
 def play(duration = 1, &block)
-  if !$any_noises_yet
-    $any_noises_yet = true
-    # hack to make it start counting from when the noises start, not when the script starts
-    $last_failure_at = Time.now
-  end
-
-  total_samples = duration * SAMPLE_RATE
-  fade_samples = AUTO_FADE_DURATION * SAMPLE_RATE
-  faded_sound = Proc.new { |s| fade_in(s, fade_samples) * fade_out(s, total_samples, fade_samples) * block.call(s) }
-
-  $channel.play([faded_sound, total_samples, 0])
+  $channel.add(SoundEnumerator.new(duration, &block))
 end
 
 def white(str)
@@ -379,14 +414,14 @@ elsif ARGV.empty?
       case c
       when '·'
         r=gaus(0.0,0.025)
-        play (0.2) { |t| sin(t**1.1+3*(t)**(1.01 + r)) }
+        play_samples (0.2) { |i| sin(i**1.1+3*(i)**(1.01 + r)) }
       when '¤'
         r=gaus(0.0,0.03)
-        play (0.5) { |t| saw(16.0*t.to_f**(0.8 + r + t.to_f / SAMPLE_RATE / 20)) }
+        play_samples (0.5) { |i| saw(16.0*i.to_f**(0.8 + r + i.to_f / SAMPLE_RATE / 20)) }
       when 'ƒ'
         $failures.push(true)
         r=gaus(0.0,0.03)
-        play (2) { |t| square(t.to_f**0.78 - 200 * Math.sin(t.to_f**(0.5 + r) * 2000 / SAMPLE_RATE * Math::PI)) }
+        play_samples (2) { |i| square(i.to_f**0.78 - 200 * Math.sin(i.to_f**(0.5 + r) * 2000 / SAMPLE_RATE * Math::PI)) }
       else
         #puts c.bytes.inspect
         #next
@@ -394,7 +429,7 @@ elsif ARGV.empty?
       print c
     end
 
-    $channel.fill_buffer
+    $sound_stream.play($channel.play)
   end
 else
   raise "Invalid arguments #{ARGV.inspect}"
