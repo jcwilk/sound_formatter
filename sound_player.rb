@@ -89,24 +89,6 @@ def fade_out(sample, max_sample, length)
   end
 end
 
-class ForwardOnlyEnumerator
-  include Enumerable
-
-  def initialize(enumerator)
-    @enum = enumerator
-  end
-
-  def each
-    if block_given?
-      loop do
-        yield @enum.next
-      end
-    else
-      enum_for(:each)
-    end
-  end
-end
-
 class SoundEnumerator
   include Enumerable
 
@@ -117,33 +99,37 @@ class SoundEnumerator
   end
 
   def play
-    enum = @raw_enum.eager
-
-    return enum unless block_given?
-
-    enum.each { |sample| yield sample }
+    # NB: This wrapper is so that layering other enumerators around this won't screw with the position tracking
+    # otherwise if you layer on lazy/chaining stuff it'll start at position=0 next time you call #next
+    Enumerator.new do |y|
+      loop do
+        y << @raw_enum.next
+      end
+    end
   end
 end
 
 class SoundSplicer
   def initialize
     @active_enumerators_store = {}
+    @active_enumerators = [] # This is to avoid creating an array via Hash#values more than we need to
   end
 
   def add(enumerator)
     uuid = SecureRandom.uuid
     active_enumerators_store[uuid] = enumerator.chain(Enumerator.new do
       active_enumerators_store.delete(uuid)
+      @active_enumerators = active_enumerators_store.values
     end).chain(0.0.step(by: 0)).each
+    @active_enumerators = active_enumerators_store.values
   end
 
   def play
-    if block_given?
-      while(!active_enumerators.empty?) do
-        yield active_enumerators.sum(&:next)
+    Enumerator.new do |y|
+      # while(!active_enumerators.empty?) do # Currently no use for this, so it's just wasted cycles to keep checking it
+      loop do
+        y << active_enumerators.sum(0.0, &:next)
       end
-    else
-      enum_for(:play)
     end
   end
 
@@ -153,7 +139,7 @@ class SoundSplicer
 
   private
 
-  attr_reader :active_enumerators_store
+  attr_reader :active_enumerators, :active_enumerators_store
 end
 
 class TapeLoop
@@ -163,13 +149,11 @@ class TapeLoop
   end
 
   def play
-    if block_given?
+    Enumerator.new do |y|
       loop do
         @index = (@index + 1) % @loop.size
-        yield @loop[@index]
+        y << @loop[@index]
       end
-    else
-      enum_for(:play)
     end
   end
 
@@ -193,13 +177,15 @@ class Channel
   end
 
   def play
-    if block_given?
-      loop do
-        yield @splicer_enum.next.tap { |sample| tape_loop.write(sample) }
+    @splicer_enum.lazy.map do |sample|
+      sample.clamp(-1,1).tap do |s|
+        tape_loop.write(s)
       end
-    else
-      enum_for(:play)
-    end
+    end.eager
+  end
+
+  def empty?
+    splicer.active_enumerators.empty?
   end
 
   private
@@ -213,6 +199,7 @@ class SoundStream
     @stdin, @stdout, _wait_thr = Open3.popen2(*args)
     @samples_written = 0
     @started_at = Time.now
+    @buffer_samples = (MAX_BUFFER_SIZE * SAMPLE_RATE).ceil
   end
 
   def close
@@ -223,23 +210,14 @@ class SoundStream
   def buffer_sample_debt
     elapsed_time = (Time.now - started_at).to_f
     elapsed_samples = (elapsed_time * SAMPLE_RATE).ceil
-    extra_samples = (MAX_BUFFER_SIZE * SAMPLE_RATE).ceil
 
-    elapsed_samples + extra_samples - samples_written
+    elapsed_samples + @buffer_samples - samples_written
   end
 
-  def play(enum)
-    buffer = nil
+  def consume(enum)
     debt = buffer_sample_debt
     buffer_size = [debt,MAX_SAMPLES_PER_BATCH].min
-    # bm = Benchmark.measure do
-      buffer = enum.lazy.map { |sample| sample.clamp(-1,1) }.first(buffer_size)
-    # end
-
-    # puts ""
-    # puts(buffer.size / bm.real)
-    # puts buffer.size
-    # puts debt
+    buffer = enum.first(buffer_size)
 
     stdin.print buffer.pack('e*')
     stdin.flush
@@ -374,18 +352,20 @@ def fill_buffer_until_empty
   end
 end
 
-# A good spot for scratch space - this will run before the console loads
 
-# 5.times do
-#   r=gaus(0.0,0.025)
-#   play (0.3) { |t| sin(t**1.1+3*(t)**(1.01 + r)) }
-# end
-
-# puts $channel.active?.inspect
-
-# fill_buffer_until_empty
 
 if ARGV[0] == "c"
+  # A good spot for scratch space - this will run before the console loads
+
+  # 5.times do
+  #   r=gaus(0.0,0.025)
+  #   play (0.3) { |t| sin(t**1.1+3*(t)**(1.01 + r)) }
+  # end
+
+  # puts $channel.active?.inspect
+
+  # $sound_stream
+
   binding.irb
 elsif ARGV.empty?
   tracker = {}
@@ -429,7 +409,7 @@ elsif ARGV.empty?
       print c
     end
 
-    $sound_stream.play($channel.play)
+    $sound_stream.consume($channel.play)
   end
 else
   raise "Invalid arguments #{ARGV.inspect}"
