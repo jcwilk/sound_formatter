@@ -145,20 +145,23 @@ end
 class TapeLoop
   def initialize
     @loop = [0.0] * (REVERB_DELAY * SAMPLE_RATE).to_i
-    @index = 0
+    @written_sample = 0.0
   end
 
   def play
-    Enumerator.new do |y|
-      loop do
-        @index = (@index + 1) % @loop.size
-        y << @loop[@index]
+    raise "Can't call #play multiple times on the same TapeLoop! Track the loop index in an instance variable if you want to do this." if @already_playing
+    @already_playing = true
+
+    (0...@loop.size).cycle.lazy.map do |index|
+      @loop[index].tap do
+        @loop[index] = @written_sample
+        @written_sample = 0.0
       end
     end
   end
 
   def write(sample)
-    @loop[@index] = sample * 0.7
+    @written_sample = sample * 0.7
   end
 end
 
