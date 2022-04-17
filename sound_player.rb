@@ -19,16 +19,9 @@ SAMPLE_RATE = 41_000 # samples per second
 # Seems like it's a missed opportunity to not calculate based on the exact sample integer,
 # even if it's almost always converted to a float right awaypipeline keeps ALSA happy
 
-FADE_FILTER_LENGTH = SAMPLE_RATE * 0.1 # samples (here in seconds) to fade in/out on every sound to avoid clicks
-# NB: Not currently used, it's quite difficult to anticipate the end of a set of sounds efficiently
-
-MAX_CONCURRENT_SOUNDS = 10 # it runs the first X sounds in the queue and the rest have to wait
-
-AUTO_FADE_DURATION = 0.02
+FADE_FILTER_LENGTH = SAMPLE_RATE * 0.02 # samples (here in seconds) to fade in/out on every sound to avoid clicks
 
 MAX_BUFFER_SIZE = 0.3
-
-SAMPLES_PER_START = 0.07 * SAMPLE_RATE
 
 REVERB_DELAY = 0.2
 
@@ -95,7 +88,9 @@ class SoundEnumerator
   def initialize(duration, &block)
     step = 1.0 / SAMPLE_RATE
     sample_count = (duration * SAMPLE_RATE).floor
-    @raw_enum = 0.0.step(by: step).lazy.map(&block).take(sample_count)
+    @raw_enum = 0.0.step(by: step).lazy.with_index.map do |s, i|
+      fade_in(i, FADE_FILTER_LENGTH) * fade_out(i, sample_count, FADE_FILTER_LENGTH) * block.call(s)
+    end.take(sample_count)
   end
 
   def play
