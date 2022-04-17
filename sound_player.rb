@@ -89,7 +89,7 @@ class SoundEnumerator
     step = 1.0 / SAMPLE_RATE
     sample_count = (duration * SAMPLE_RATE).floor
     @raw_enum = 0.0.step(by: step).lazy.with_index.map do |s, i|
-      fade_in(i, FADE_FILTER_LENGTH) * fade_out(i, sample_count, FADE_FILTER_LENGTH) * block.call(s)
+      fade_in(i, FADE_FILTER_LENGTH) * fade_out(i, sample_count, FADE_FILTER_LENGTH) * block.call(s, i)
     end.take(sample_count)
   end
 
@@ -134,9 +134,10 @@ class SoundSplicer
 end
 
 class TapeLoop
-  def initialize
-    @loop = [0.0] * (REVERB_DELAY * SAMPLE_RATE).to_i
-    @written_sample = 0.0
+  def initialize(feed, delay:, scale:)
+    @loop = [0.0] * [(delay * SAMPLE_RATE).floor,1].max
+    @feed = feed
+    @scale = scale
   end
 
   def play
@@ -145,14 +146,9 @@ class TapeLoop
 
     (0...@loop.size).cycle.lazy.map do |index|
       @loop[index].tap do
-        @loop[index] = @written_sample
-        @written_sample = 0.0
+        @loop[index] = @feed.next * @scale
       end
     end
-  end
-
-  def write(sample)
-    @written_sample = sample * 0.7
   end
 end
 
@@ -161,19 +157,31 @@ class Channel
 
   def initialize
     @splicer = SoundSplicer.new
-    @tape_loop = TapeLoop.new
-    add(tape_loop)
+    @feeds = []
     @splicer_enum = splicer.play
   end
 
-  def add(playable)
+  def add_playable(playable)
     splicer.add(playable.play)
   end
 
+  def add_output_feed
+    Enumerator.new do |y|
+      fed_value = 0.0
+      loop do
+        fed_value = y.to_proc.call(fed_value) || 0.0
+      end
+    end.tap do |feed|
+      feeds << feed
+    end
+  end
+
   def play
-    @splicer_enum.lazy.map do |sample|
+    splicer_enum.lazy.map do |sample|
       sample.clamp(-1,1).tap do |s|
-        tape_loop.write(s)
+        feeds.each do |feed|
+          feed.feed(s)
+        end
       end
     end.eager
   end
@@ -184,7 +192,7 @@ class Channel
 
   private
 
-  attr_reader :splicer, :tape_loop
+  attr_reader :feeds, :splicer, :splicer_enum, :tape_loop
 end
 
 class SoundStream
@@ -229,15 +237,12 @@ $last_failure_at = Time.now
 $any_noises_yet = false
 
 $channel = Channel.new
+tape_loop = TapeLoop.new($channel.add_output_feed, delay: REVERB_DELAY, scale: 0.7)
+$channel.add_playable(tape_loop)
 $sound_stream = SoundStream.new
 
-# for legacy sound equations because I'm too lazy to convert them to be based on seconds rather than sample index
-def play_samples(duration = 1, &block)
-  play(duration) { |seconds| block.call((seconds.to_f * SAMPLE_RATE).floor) }
-end
-
 def play(duration = 1, &block)
-  $channel.add(SoundEnumerator.new(duration, &block))
+  $channel.add_playable(SoundEnumerator.new(duration, &block))
 end
 
 def white(str)
@@ -339,15 +344,6 @@ def get_characters
   end
 end
 
-def fill_buffer_until_empty
-  while ($channel.active?) do
-    puts "filling"
-    $channel.fill_buffer
-  end
-end
-
-
-
 if ARGV[0] == "c"
   # A good spot for scratch space - this will run before the console loads
 
@@ -388,14 +384,14 @@ elsif ARGV.empty?
       case c
       when '·'
         r=gaus(0.0,0.025)
-        play_samples (0.2) { |i| sin(i**1.1+3*(i)**(1.01 + r)) }
+        play (0.2) { |_s, i| sin(i**1.1+3*(i)**(1.01 + r)) }
       when '¤'
         r=gaus(0.0,0.03)
-        play_samples (0.5) { |i| saw(16.0*i.to_f**(0.8 + r + i.to_f / SAMPLE_RATE / 20)) }
+        play (0.5) { |_s, i| saw(16.0*i.to_f**(0.8 + r + i.to_f / SAMPLE_RATE / 20)) }
       when 'ƒ'
         $failures.push(true)
         r=gaus(0.0,0.03)
-        play_samples (2) { |i| square(i.to_f**0.78 - 200 * Math.sin(i.to_f**(0.5 + r) * 2000 / SAMPLE_RATE * Math::PI)) }
+        play (2) { |_s, i| square(i.to_f**0.78 - 200 * Math.sin(i.to_f**(0.5 + r) * 2000 / SAMPLE_RATE * Math::PI)) }
       else
         #puts c.bytes.inspect
         #next
