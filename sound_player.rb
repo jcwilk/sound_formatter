@@ -133,10 +133,6 @@ class SoundSplicer
     end
   end
 
-  def active_enumerators
-    active_enumerators_store.values
-  end
-
   private
 
   attr_reader :active_enumerators, :active_enumerators_store
