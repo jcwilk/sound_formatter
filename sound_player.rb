@@ -27,6 +27,19 @@ REVERB_DELAY = 0.2
 
 MAX_SAMPLES_PER_BATCH = 2000
 
+# Oddly this did not play nicely with being a refinement, maybe something to do with the metaprogramming involved with instantiating an Enumerator?
+class Enumerator
+  def lock
+    if block_given?
+      loop do
+        yield self.next
+      end
+    else
+      enum_for(:lock)
+    end
+  end
+end
+
 def square(sample)
   amplitude = 0.05
   frequency = 1000
@@ -82,25 +95,40 @@ def fade_out(sample, max_sample, length)
   end
 end
 
-class SoundEnumerator
-  include Enumerable
-
+class TimedSoundEnumerator
   def initialize(duration, &block)
     step = 1.0 / SAMPLE_RATE
     sample_count = (duration * SAMPLE_RATE).floor
-    @raw_enum = 0.0.step(by: step).lazy.with_index.map do |s, i|
+    @raw_enum = 0.0.step(by: step).lock.lazy.with_index.map do |s, i|
       fade_in(i, FADE_FILTER_LENGTH) * fade_out(i, sample_count, FADE_FILTER_LENGTH) * block.call(s, i)
     end.take(sample_count)
   end
 
   def play
-    # NB: This wrapper is so that layering other enumerators around this won't screw with the position tracking
-    # otherwise if you layer on lazy/chaining stuff it'll start at position=0 next time you call #next
+    @raw_enum
+  end
+end
+
+class ControlledSoundEnumerator
+  include Enumerable
+
+  def initialize(&block)
+    step = 1.0 / SAMPLE_RATE
+    @raw_enum = 0.0.step(by: step).lock.lazy.with_index.map do |s, i|
+      fade_in(i, FADE_FILTER_LENGTH) * block.call(s, i)
+    end
+  end
+
+  def play
     Enumerator.new do |y|
       loop do
         y << @raw_enum.next
       end
     end
+  end
+
+  def end
+    @raw_enum = @raw_enum.lock.with_index.take(FADE_FILTER_LENGTH).map { |sample, i| sample * fade_out(i, FADE_FILTER_LENGTH, FADE_FILTER_LENGTH) }
   end
 end
 
@@ -121,8 +149,7 @@ class SoundSplicer
 
   def play
     Enumerator.new do |y|
-      # while(!active_enumerators.empty?) do # Currently no use for this, so it's just wasted cycles to keep checking it
-      loop do
+      while(!active_enumerators.empty?) do
         y << active_enumerators.sum(0.0, &:next)
       end
     end
@@ -138,15 +165,18 @@ class TapeLoop
     @loop = [0.0] * [(delay * SAMPLE_RATE).floor,1].max
     @feed = feed
     @scale = scale
+    @index = 0
   end
 
   def play
-    raise "Can't call #play multiple times on the same TapeLoop! Track the loop index in an instance variable if you want to do this." if @already_playing
+    raise "Generating multiple enumerators from the same tape loop should be avoided as it can double-advance the header" if @already_playing
     @already_playing = true
 
-    (0...@loop.size).cycle.lazy.map do |index|
-      @loop[index].tap do
-        @loop[index] = @feed.next * @scale
+    Enumerator.new do |y|
+      loop do
+        @loop[@index] = @feed.next * @scale
+        @index = (@index + 1) % @loop.size
+        y << @loop[@index]
       end
     end
   end
@@ -237,12 +267,12 @@ $last_failure_at = Time.now
 $any_noises_yet = false
 
 $channel = Channel.new
-tape_loop = TapeLoop.new($channel.add_output_feed, delay: REVERB_DELAY, scale: 0.7)
+tape_loop = TapeLoop.new($channel.add_output_feed, delay: REVERB_DELAY, scale: 0.6)
 $channel.add_playable(tape_loop)
 $sound_stream = SoundStream.new
 
 def play(duration = 1, &block)
-  $channel.add_playable(SoundEnumerator.new(duration, &block))
+  $channel.add_playable(TimedSoundEnumerator.new(duration, &block))
 end
 
 def white(str)
@@ -385,6 +415,12 @@ elsif ARGV.empty?
       when '·'
         r=gaus(0.0,0.025)
         play (0.2) { |_s, i| sin(i**1.1+3*(i)**(1.01 + r)) }
+
+        # if $enum
+        #   $enum.end
+        # end
+        # $enum = ControlledSoundEnumerator.new { |_s, i| sin(i**1.1+3*(i)**(1.01 + r)) }
+        # $channel.add_playable($enum)
       when '¤'
         r=gaus(0.0,0.03)
         play (0.5) { |_s, i| saw(16.0*i.to_f**(0.8 + r + i.to_f / SAMPLE_RATE / 20)) }
