@@ -3,7 +3,7 @@
 require "rspec/core/formatters/base_text_formatter"
 
 class SoundFormatter < RSpec::Core::Formatters::BaseTextFormatter
-  RSpec::Core::Formatters.register self, :example_passed, :example_pending, :example_failed, :start_dump
+  RSpec::Core::Formatters.register self, :example_passed, :example_pending, :example_failed
 
   JSON_START = "↦"
   JSON_END = "↤"

@@ -124,7 +124,7 @@ class ControlledSoundEnumerator
       loop do
         y << @raw_enum.next
       end
-    end
+    end.lazy
   end
 
   def end
@@ -152,7 +152,7 @@ class SoundSplicer
       while(!active_enumerators.empty?) do
         y << active_enumerators.sum(0.0, &:next)
       end
-    end
+    end.lazy
   end
 
   private
@@ -169,16 +169,13 @@ class TapeLoop
   end
 
   def play
-    raise "Generating multiple enumerators from the same tape loop should be avoided as it can double-advance the header" if @already_playing
-    @already_playing = true
-
     Enumerator.new do |y|
       loop do
         @loop[@index] = @feed.next * @scale
         @index = (@index + 1) % @loop.size
         y << @loop[@index]
       end
-    end
+    end.lazy
   end
 end
 
@@ -191,8 +188,8 @@ class Channel
     @splicer_enum = splicer.play
   end
 
-  def add_playable(playable)
-    splicer.add(playable.play)
+  def add(enumerator)
+    splicer.add(enumerator)
   end
 
   def add_output_feed
@@ -201,7 +198,7 @@ class Channel
       loop do
         fed_value = y.to_proc.call(fed_value) || 0.0
       end
-    end.tap do |feed|
+    end.lazy.tap do |feed|
       feeds << feed
     end
   end
@@ -213,7 +210,7 @@ class Channel
           feed.feed(s)
         end
       end
-    end.eager
+    end
   end
 
   def empty?
@@ -268,11 +265,11 @@ $any_noises_yet = false
 
 $channel = Channel.new
 tape_loop = TapeLoop.new($channel.add_output_feed, delay: REVERB_DELAY, scale: 0.6)
-$channel.add_playable(tape_loop)
+$channel.add(tape_loop.play)
 $sound_stream = SoundStream.new
 
 def play(duration = 1, &block)
-  $channel.add_playable(TimedSoundEnumerator.new(duration, &block))
+  $channel.add(TimedSoundEnumerator.new(duration, &block).play)
 end
 
 def white(str)
@@ -425,7 +422,7 @@ elsif ARGV.empty?
         r=gaus(0.0,0.03)
         play (0.5) { |_s, i| saw(16.0*i.to_f**(0.8 + r + i.to_f / SAMPLE_RATE / 20)) }
       when 'ƒ'
-        $failures.push(true)
+        # $failures.push(true)
         r=gaus(0.0,0.03)
         play (2) { |_s, i| square(i.to_f**0.78 - 200 * Math.sin(i.to_f**(0.5 + r) * 2000 / SAMPLE_RATE * Math::PI)) }
       else
