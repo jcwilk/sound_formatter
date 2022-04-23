@@ -180,38 +180,33 @@ class TapeLoop
 end
 
 class Channel
-  include Enumerable
-
   def initialize
-    @feeds = []
     @splicer = SoundSplicer.new
     splicer.add(0.0.step(by: 0).lazy)
-    @splicer_enum = splicer.play
+    @splicer_enum = splicer.play.map do |sample|
+      sample.clamp(-1,1)
+    end
+    @index = 0
+    @last_value = 0.0
   end
 
   def add(enumerator)
     splicer.add(enumerator)
   end
 
-  def add_output_feed
-    Enumerator.new do |y|
-      fed_value = 0.0
-      loop do
-        fed_value = y.to_proc.call(fed_value) || 0.0
-      end
-    end.lazy.tap do |feed|
-      feeds << feed
-    end
-  end
-
   def play
-    splicer_enum.lazy.map do |sample|
-      sample.clamp(-1,1).tap do |s|
-        feeds.each do |feed|
-          feed.feed(s)
-        end
+    our_index = -1
+    Enumerator.new do |y|
+      loop do
+        y << if our_index == @index
+            our_index = @index += 1
+            @last_value = splicer_enum.next
+          else
+            our_index = @index
+            @last_value
+          end
       end
-    end
+    end.lazy
   end
 
   def empty?
@@ -264,13 +259,89 @@ $last_failure_at = Time.now
 
 $any_noises_yet = false
 
-$channel = Channel.new
-tape_loop = TapeLoop.new($channel.add_output_feed, delay: REVERB_DELAY, scale: 0.6)
-$channel.add(tape_loop.play)
+# long_tape_channel = Channel.new
+# long_tape_channel.add_input_feed($input_channel.add_output_feed)
+# long_tape_loop = TapeLoop.new(long_tape_channel.add_output_feed, delay: 5, scale: 0.6)
+# long_tape_channel.add_input_feed(long_tape_loop.play)
+
+# short_tape_channel = Channel.new
+# short_tape_channel.add_input_feed(long_tape_channel.play)
+# short_tape_loop = TapeLoop.new(short_tape_channel.add_output_feed, delay: 0.1, scale: 0.85)
+# short_tape_channel.add_input_feed(short_tape_loop.play)
+
+# $output_channel = SoundSplicer.new
+# $output_channel.add_input_feed($input_channel.play)
+# $output_channel.add_input_feed(short_tape_channel.play)
+
+
+
+
+
+
+$input_channel = Channel.new
+
+echo = TapeLoop.new($input_channel.play, delay: 0.6, scale: 0.25)
+reverb = TapeLoop.new($input_channel.play, delay: 0.05, scale: 0.5)
+
+$input_channel.add(echo.play)
+$input_channel.add(reverb.play)
+
+$output_enum = $input_channel.play
+
+# outgoing_delay = TapeLoop.new($input_channel.play, delay: 2, scale: 0.4)
+
+# distant_channel = Channel.new
+# distant_channel.add(outgoing_delay.play)
+
+# distand_reverb = TapeLoop.new(distant_channel.play, delay: 0.05, scale: 0.6)
+# distant_channel.add(distand_reverb.play)
+
+# incoming_delay = TapeLoop.new(distant_channel.play, delay: 2, scale: 1.4)
+# $input_channel.add(incoming_delay.play)
+
+# $output_enum = $input_channel.play
+
+
+
+
+
+# long_tape_input_channel = Channel.new
+# long_tape_input_channel.add($input_channel.play)
+
+# long_tape_output_channel = Channel.new
+# #long_tape_input_channel.add(long_tape_output_channel.play)
+
+# long_tape_loop = TapeLoop.new(long_tape_input_channel.play, delay: 2, scale: 0.4)
+# long_tape_output_channel.add(long_tape_loop.play)
+
+
+
+# # long_tape_output_channel.add($input_channel.play)
+# # long_tape_loop = TapeLoop.new(long_tape_output_channel.add_output_feed, delay: 5, scale: 0.6)
+# # long_tape_output_channel.add(long_tape_loop.play)
+
+# short_tape_channel = Channel.new
+# short_tape_channel.add(long_tape_output_channel.play)
+
+# short_tape_loop = TapeLoop.new(short_tape_channel.play, delay: 0.1, scale: 0.5)
+# short_tape_channel.add(short_tape_loop.play)
+
+# long_tape_input_channel.add(short_tape_channel.play)
+
+# #$input_channel.add($input_channel.add_output_feed)
+# #tape_loop = TapeLoop.new($input_channel.add_output_feed, delay: REVERB_DELAY, scale: 0.6)
+# #$input_channel.add(tape_loop.play)
+
+# $output_channel = Channel.new
+# $output_channel.add(short_tape_channel.play)
+# $output_channel.add($input_channel.play)
+
+# $output_enum = $output_channel.play
+
 $sound_stream = SoundStream.new
 
 def play(duration = 1, &block)
-  $channel.add(TimedSoundEnumerator.new(duration, &block).play)
+  $input_channel.add(TimedSoundEnumerator.new(duration, &block).play)
 end
 
 def white(str)
@@ -433,7 +504,7 @@ elsif ARGV.empty?
       print c
     end
 
-    $sound_stream.consume($channel.play)
+    $sound_stream.consume($output_enum)
   end
 else
   raise "Invalid arguments #{ARGV.inspect}"

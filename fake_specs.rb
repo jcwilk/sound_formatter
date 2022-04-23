@@ -3,7 +3,7 @@
 $stdout.sync = true
 
 while(true) do
-  sleep(rand()*1)
+  sleep(rand())
   print('·')
   #print('ƒ') if rand < 0.02
   print('¤') if rand < 0.05
