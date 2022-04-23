@@ -182,7 +182,7 @@ end
 class Channel
   def initialize
     @splicer = SoundSplicer.new
-    splicer.add(0.0.step(by: 0).lazy)
+
     @splicer_enum = splicer.play.map do |sample|
       sample.clamp(-1,1)
     end
@@ -192,6 +192,13 @@ class Channel
 
   def add(enumerator)
     splicer.add(enumerator)
+  end
+
+  # This adds an infinite silent enumerator so if it has nothing to play it will keep playing silence
+  # Without this, the channel will stop generating samples and the sound stream buffer will underrun
+  # If you *do* want the channel to auto-remove itself from other splicers/channels then don't call this
+  def add_silence
+    splicer.add(0.0.step(by: 0).lazy)
   end
 
   def play
@@ -209,13 +216,9 @@ class Channel
     end.lazy
   end
 
-  def empty?
-    splicer.active_enumerators.empty?
-  end
-
   private
 
-  attr_reader :feeds, :splicer, :splicer_enum, :tape_loop
+  attr_reader :feeds, :splicer, :splicer_enum
 end
 
 class SoundStream
@@ -279,6 +282,7 @@ $any_noises_yet = false
 
 
 $input_channel = Channel.new
+$input_channel.add_silence
 
 echo = TapeLoop.new($input_channel.play, delay: 0.6, scale: 0.25)
 reverb = TapeLoop.new($input_channel.play, delay: 0.05, scale: 0.5)
