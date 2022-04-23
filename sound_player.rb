@@ -183,8 +183,9 @@ class Channel
   include Enumerable
 
   def initialize
-    @splicer = SoundSplicer.new
     @feeds = []
+    @splicer = SoundSplicer.new
+    splicer.add(0.0.step(by: 0).lazy)
     @splicer_enum = splicer.play
   end
 
