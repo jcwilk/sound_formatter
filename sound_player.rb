@@ -110,8 +110,6 @@ class TimedSoundEnumerator
 end
 
 class ControlledSoundEnumerator
-  include Enumerable
-
   def initialize(&block)
     step = 1.0 / SAMPLE_RATE
     @raw_enum = 0.0.step(by: step).lock.lazy.with_index.map do |s, i|
@@ -160,6 +158,63 @@ class SoundSplicer
   attr_reader :active_enumerators, :active_enumerators_store
 end
 
+class SoundSplitter
+  def initialize(enumerator)
+    @enumerator = enumerator
+    @index = 0
+    @last_value = 0.0
+  end
+
+  def play
+    # Possible bug with requiring this to be -1, if set to 0 it triggers a "double resume (FiberError)" - this may be a hint
+    # that one of these mechanisms is trying to start enumerating before it's supposed to... but just something to keep in mind,
+    # it's still working fine if started at -1 and the only consequence is a possible extra sample of silence at the beginning :shrug:
+    our_index = -1
+    Enumerator.new do |y|
+      loop do
+        y << if our_index == @index
+            (@last_value = enumerator.next).tap do
+              our_index = (@index += 1)
+            end
+          else
+            our_index = @index
+            @last_value
+          end
+      end
+    end.lazy
+  end
+
+  private
+
+  attr_reader :enumerator, :index
+end
+
+class Channel
+  def initialize
+    @splicer = SoundSplicer.new
+    @splitter = SoundSplitter.new(splicer.play.map { |sample| sample.clamp(-1,1) })
+  end
+
+  def add(enumerator)
+    splicer.add(enumerator)
+  end
+
+  # This adds an infinite silent enumerator so if it has nothing to play it will keep playing silence
+  # Without this, the channel will stop generating samples and the sound stream buffer will underrun
+  # If you *do* want the channel to auto-remove itself from other splicers/channels then don't call this
+  def add_silence
+    splicer.add(0.0.step(by: 0).lazy)
+  end
+
+  def play
+    splitter.play
+  end
+
+  private
+
+  attr_reader :splicer, :splitter
+end
+
 class TapeLoop
   def initialize(feed, delay:, scale:)
     @loop = [0.0] * [(delay * SAMPLE_RATE).floor,1].max
@@ -177,48 +232,6 @@ class TapeLoop
       end
     end.lazy
   end
-end
-
-class Channel
-  def initialize
-    @splicer = SoundSplicer.new
-
-    @splicer_enum = splicer.play.map do |sample|
-      sample.clamp(-1,1)
-    end
-    @index = 0
-    @last_value = 0.0
-  end
-
-  def add(enumerator)
-    splicer.add(enumerator)
-  end
-
-  # This adds an infinite silent enumerator so if it has nothing to play it will keep playing silence
-  # Without this, the channel will stop generating samples and the sound stream buffer will underrun
-  # If you *do* want the channel to auto-remove itself from other splicers/channels then don't call this
-  def add_silence
-    splicer.add(0.0.step(by: 0).lazy)
-  end
-
-  def play
-    our_index = -1
-    Enumerator.new do |y|
-      loop do
-        y << if our_index == @index
-            our_index = @index += 1
-            @last_value = splicer_enum.next
-          else
-            our_index = @index
-            @last_value
-          end
-      end
-    end.lazy
-  end
-
-  private
-
-  attr_reader :feeds, :splicer, :splicer_enum
 end
 
 class SoundStream
