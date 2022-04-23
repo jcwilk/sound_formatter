@@ -224,14 +224,92 @@ class TapeLoop
   end
 
   def play
-    Enumerator.new do |y|
-      loop do
-        @loop[@index] = @feed.next * @scale
-        @index = (@index + 1) % @loop.size
-        y << @loop[@index]
-      end
-    end.lazy
+    feed.map do |sample|
+      @loop[index] = sample * scale
+      @index = (index + 1) % @loop.size
+      @loop[index]
+    end
   end
+
+  private
+
+  attr_reader :feed, :index, :scale
+end
+
+# Reasonably natural-sounding low-pass filter, good for echoes
+class RollingAverageFilter
+  def initialize(feed, span:)
+    @average = 0.0
+    @feed = feed
+    @queue = [0.0] * [(span * SAMPLE_RATE).floor,1].max
+  end
+
+  def play
+    feed.map do |sample|
+      queue.push(sample)
+      @average += (sample - queue.shift) / queue.size
+    end
+  end
+
+  private
+
+  attr_reader :average, :feed, :queue
+end
+
+# Very weird low-pass filter that makes sounds that are too high pitched fade out as laser-like sounds
+# I guess because it kind of turns them into sloppy triangle waves as it forces it to be limited to a specific slope
+class DraggingFilter
+  def initialize(feed, change_per_second:)
+    @feed = feed
+    @max_change = change_per_second.to_f / SAMPLE_RATE
+    @value = 0.0
+  end
+
+  def play
+    feed.map do |sample|
+      @value += (sample - @value).clamp(-max_change, max_change)
+    end
+  end
+
+  private
+
+  attr_reader :feed, :max_change, :value
+end
+
+# Kind of a watered-down low-pass filter that has less extreme a difference in its effect between lower and higher frequencies
+# A possible benefit is that it doesn't color the sound very much, it doesn't "sound" like a filter even though it does affecthigher frequencies more
+# Finding the right `influence` level here is a bit tricky too since it's hard to hear exactly where the threshold is
+class InfluenceFilter
+  def initialize(feed, influence:)
+    @feed = feed
+    @normalized_influence = [influence.to_f / SAMPLE_RATE,1.0].min
+    @value = 0.0
+  end
+
+  def play
+    feed.map do |sample|
+      @value += (sample - @value) * @normalized_influence
+    end
+  end
+
+  private
+
+  attr_reader :feed, :normalized_influence, :value
+end
+
+# Useful for turning low-pass filters into high-pass filters
+class InversionFilter
+  def initialize(feed)
+    @feed = feed
+  end
+
+  def play
+    feed.map { |sample| -sample }
+  end
+
+  private
+
+  attr_reader :feed
 end
 
 class SoundStream
@@ -297,8 +375,19 @@ $any_noises_yet = false
 $input_channel = Channel.new
 $input_channel.add_silence
 
-echo = TapeLoop.new($input_channel.play, delay: 0.6, scale: 0.25)
-reverb = TapeLoop.new($input_channel.play, delay: 0.05, scale: 0.5)
+#filter = InfluenceFilter.new($input_channel.play, influence: 10_000)
+#filter = DraggingFilter.new($input_channel.play, change_per_second: 500)
+#filter = RollingAverageFilter.new($input_channel.play, span: 1.0/3000)
+
+# with inversion, low-pass becomes high-pass
+#inversion = InversionFilter.new(filter.play)
+
+filter_channel = Channel.new
+#filter_channel.add(inversion.play)
+filter_channel.add($input_channel.play)
+
+echo = TapeLoop.new(filter_channel.play, delay: 0.6, scale: 0.4)
+reverb = TapeLoop.new(filter_channel.play, delay: 0.05, scale: 0.5)
 
 $input_channel.add(echo.play)
 $input_channel.add(reverb.play)
@@ -500,7 +589,7 @@ elsif ARGV.empty?
       case c
       when '·'
         r=gaus(0.0,0.025)
-        play (0.2) { |_s, i| sin(i**1.1+3*(i)**(1.01 + r)) }
+        play (0.2) { |_s, i| sin(i**1.1+2*(i)**(1.01 + r)) }
 
         # if $enum
         #   $enum.end
