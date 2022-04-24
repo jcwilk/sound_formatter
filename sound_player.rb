@@ -99,9 +99,18 @@ class TimedSoundEnumerator
   def initialize(duration, &block)
     step = 1.0 / SAMPLE_RATE
     sample_count = (duration * SAMPLE_RATE).floor
-    @raw_enum = 0.0.step(by: step).lock.lazy.with_index.map do |s, i|
-      fade_in(i, FADE_FILTER_LENGTH) * fade_out(i, sample_count, FADE_FILTER_LENGTH) * block.call(s, i)
-    end.take(sample_count)
+    base_enum = 0.0.step(by: step).lazy.with_index.lock
+
+    if sample_count <= 2 * FADE_FILTER_LENGTH
+      @raw_enum = 0.0.step(by: step).lazy.take(sample_count).lock
+      return
+    end
+
+    fading_in = base_enum.take(FADE_FILTER_LENGTH).map { |s, i| fade_in(i, FADE_FILTER_LENGTH) * block.call(s, i) }
+    vanilla = base_enum.take(sample_count - FADE_FILTER_LENGTH * 2).map(&block)
+    fading_out = base_enum.take(FADE_FILTER_LENGTH).map { |s, i| fade_out(i, sample_count, FADE_FILTER_LENGTH) * block.call(s, i) }
+
+    @raw_enum = fading_in.chain(vanilla).chain(fading_out).lazy
   end
 
   def play
@@ -138,10 +147,15 @@ class SoundSplicer
 
   def add(enumerator)
     uuid = SecureRandom.uuid
-    active_enumerators_store[uuid] = enumerator.chain(Enumerator.new do
-      active_enumerators_store.delete(uuid)
-      @active_enumerators = active_enumerators_store.values
-    end).chain(0.0.step(by: 0)).each
+    active_enumerators_store[uuid] = enumerator
+      .chain(
+        Enumerator.new do
+          active_enumerators_store.delete(uuid)
+          @active_enumerators = active_enumerators_store.values
+        end
+      ).chain(
+        0.0.step(by: 0)
+      ).each
     @active_enumerators = active_enumerators_store.values
   end
 
