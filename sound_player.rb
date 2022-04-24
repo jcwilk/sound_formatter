@@ -279,11 +279,11 @@ class TapeLoop
   end
 
   def play
-    feed.map do |sample|
-      @loop[index] = sample * scale
-      @index = (index + 1) % @loop.size
-      @loop[index]
-    end
+    (0...@loop.size).each.lazy.cycle.zip(feed).map do |index, new_sample|
+      ret = @loop[index]
+      @loop[index] = new_sample * scale
+      ret
+    end.lock
   end
 
   private
@@ -432,7 +432,7 @@ $input_channel.add_silence
 
 #filter = InfluenceFilter.new($input_channel.play, influence: 10_000)
 #filter = DraggingFilter.new($input_channel.play, change_per_second: 500)
-filter = RollingAverageFilter.new($input_channel.play, span: 1.0/6000)
+filter = RollingAverageFilter.new($input_channel.play, span: 1.0/8_000)
 
 # with inversion, low-pass becomes high-pass
 #inversion = InversionFilter.new(filter.play)
@@ -444,8 +444,8 @@ filter_channel = Channel.new
 #filter_channel.add($input_channel.play)
 filter_channel.add($switched_filter.play)
 
-echo = TapeLoop.new(filter_channel.play, delay: 0.6, scale: 0.4)
-reverb = TapeLoop.new(filter_channel.play, delay: 0.05, scale: 0.5)
+echo = TapeLoop.new(filter_channel.play, delay: 0.5823, scale: 0.5)
+reverb = TapeLoop.new(filter_channel.play, delay: 0.05812, scale: 0.412)
 
 $input_channel.add(echo.play)
 $input_channel.add(reverb.play)
