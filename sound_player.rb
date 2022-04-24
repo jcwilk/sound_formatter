@@ -377,14 +377,15 @@ $input_channel.add_silence
 
 #filter = InfluenceFilter.new($input_channel.play, influence: 10_000)
 #filter = DraggingFilter.new($input_channel.play, change_per_second: 500)
-#filter = RollingAverageFilter.new($input_channel.play, span: 1.0/3000)
+filter = RollingAverageFilter.new($input_channel.play, span: 1.0/6000)
 
 # with inversion, low-pass becomes high-pass
 #inversion = InversionFilter.new(filter.play)
 
 filter_channel = Channel.new
 #filter_channel.add(inversion.play)
-filter_channel.add($input_channel.play)
+#filter_channel.add($input_channel.play)
+filter_channel.add(filter.play)
 
 echo = TapeLoop.new(filter_channel.play, delay: 0.6, scale: 0.4)
 reverb = TapeLoop.new(filter_channel.play, delay: 0.05, scale: 0.5)
