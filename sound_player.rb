@@ -101,16 +101,15 @@ class TimedSoundEnumerator
     sample_count = (duration * SAMPLE_RATE).floor
     base_enum = 0.0.step(by: step).lazy.with_index.lock
 
-    if sample_count <= 2 * FADE_FILTER_LENGTH
+    if sample_count <= FADE_FILTER_LENGTH
       @raw_enum = 0.0.step(by: step).lazy.take(sample_count).lock
       return
     end
 
     fading_in = base_enum.take(FADE_FILTER_LENGTH).map { |s, i| fade_in(i, FADE_FILTER_LENGTH) * block.call(s, i) }
-    vanilla = base_enum.take(sample_count - FADE_FILTER_LENGTH * 2).map(&block)
-    fading_out = base_enum.take(FADE_FILTER_LENGTH).map { |s, i| fade_out(i, sample_count, FADE_FILTER_LENGTH) * block.call(s, i) }
+    vanilla = base_enum.take(sample_count - FADE_FILTER_LENGTH).map(&block)
 
-    @raw_enum = fading_in.chain(vanilla).chain(fading_out).lazy
+    @raw_enum = DurationFilter.new(fading_in.chain(vanilla).lazy, sample_count: sample_count).play
   end
 
   def play
@@ -118,24 +117,66 @@ class TimedSoundEnumerator
   end
 end
 
-class ControlledSoundEnumerator
-  def initialize(&block)
-    step = 1.0 / SAMPLE_RATE
-    @raw_enum = 0.0.step(by: step).lock.lazy.with_index.map do |s, i|
-      fade_in(i, FADE_FILTER_LENGTH) * block.call(s, i)
-    end
-  end
-
-  def play
-    Enumerator.new do |y|
-      loop do
-        y << @raw_enum.next
+class KillSwitchFilter
+  def initialize(enumerator)
+    last_sample = nil
+    vanilla = enumerator.take_while do |sample|
+      if @ending
+        last_sample = sample
+        false
+      else
+        true
       end
-    end.lazy
+    end.chain(Enumerator.new { |y| y << last_sample if last_sample })
+    fading_out = enumerator.with_index.take(FADE_FILTER_LENGTH).map { |sample, i| fade_out(i, FADE_FILTER_LENGTH, FADE_FILTER_LENGTH) * sample }
+
+    @enum = vanilla.chain(fading_out).lazy
   end
 
   def end
-    @raw_enum = @raw_enum.lock.with_index.take(FADE_FILTER_LENGTH).map { |sample, i| sample * fade_out(i, FADE_FILTER_LENGTH, FADE_FILTER_LENGTH) }
+    @ending = true
+  end
+
+  def play
+    @enum
+  end
+end
+
+class DurationFilter
+  def initialize(enumerator, sample_count:)
+    #sample_count = (duration * SAMPLE_RATE).floor
+    if sample_count < FADE_FILTER_LENGTH
+      @enum = 0.0.step(by: 0).lazy.take(sample_count)
+      return
+    end
+
+    vanilla = enumerator.take(sample_count - FADE_FILTER_LENGTH)
+    fading_out = enumerator.with_index.take(FADE_FILTER_LENGTH).map { |sample, i| fade_out(i, FADE_FILTER_LENGTH, FADE_FILTER_LENGTH) * sample }
+
+    @enum = vanilla.chain(fading_out).lazy
+  end
+
+  def play
+    @enum
+  end
+end
+
+class ControlledSoundEnumerator
+  def initialize(&block)
+    step = 1.0 / SAMPLE_RATE
+    @raw_enum = 0.0.step(by: step).lazy.with_index.lock.map do |s, i|
+      fade_in(i, FADE_FILTER_LENGTH) * block.call(s, i)
+    end
+    @killswitch = KillSwitchFilter.new(@raw_enum)
+    @raw_enum = @killswitch.play
+  end
+
+  def play
+    @raw_enum
+  end
+
+  def end
+    @killswitch.end
   end
 end
 
@@ -396,10 +437,12 @@ filter = RollingAverageFilter.new($input_channel.play, span: 1.0/6000)
 # with inversion, low-pass becomes high-pass
 #inversion = InversionFilter.new(filter.play)
 
+$switched_filter = KillSwitchFilter.new(filter.play)
+
 filter_channel = Channel.new
 #filter_channel.add(inversion.play)
 #filter_channel.add($input_channel.play)
-filter_channel.add(filter.play)
+filter_channel.add($switched_filter.play)
 
 echo = TapeLoop.new(filter_channel.play, delay: 0.6, scale: 0.4)
 reverb = TapeLoop.new(filter_channel.play, delay: 0.05, scale: 0.5)
@@ -610,12 +653,12 @@ elsif ARGV.empty?
         #   $enum.end
         # end
         # $enum = ControlledSoundEnumerator.new { |_s, i| sin(i**1.1+3*(i)**(1.01 + r)) }
-        # $channel.add_playable($enum)
+        # $input_channel.add($enum.play)
       when '¤'
         r=gaus(0.0,0.03)
         play (0.5) { |_s, i| saw(16.0*i.to_f**(0.8 + r + i.to_f / SAMPLE_RATE / 20)) }
       when 'ƒ'
-        # $failures.push(true)
+        $switched_filter.end
         r=gaus(0.0,0.03)
         play (2) { |_s, i| square(i.to_f**0.78 - 200 * Math.sin(i.to_f**(0.5 + r) * 2000 / SAMPLE_RATE * Math::PI)) }
       else
