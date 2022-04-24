@@ -75,11 +75,11 @@ end
 
 def fade_in(sample, length)
   if sample < 0
-    0
+    0.0
   elsif sample < length
     Math.sqrt(sample.to_f/length)
   else
-    1
+    1.0
   end
 end
 
@@ -87,11 +87,11 @@ def fade_out(sample, max_sample, length)
   samples_from_end = max_sample - sample
 
   if samples_from_end > length
-    1
+    1.0
   elsif sample < max_sample
     Math.sqrt(samples_from_end.to_f/length)
   else
-    0
+    0.0
   end
 end
 
