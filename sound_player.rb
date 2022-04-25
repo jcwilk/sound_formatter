@@ -404,6 +404,44 @@ class SoundStream
   attr_reader :samples_written, :started_at, :stdin, :stdout
 end
 
+class RecordingStream
+  def initialize
+    args = %w[rec -q -t raw -r] + [SAMPLE_RATE.to_s] + %w[-c 1 -e s -]
+    @stdin, @stdout, _wait_thr = Open3.popen2(*args)
+    @samples_read = 0
+    @started_at = Time.now
+    @buffer_samples = (MAX_BUFFER_SIZE * SAMPLE_RATE).ceil
+  end
+
+  def close
+    stdin.close
+    stdout.close
+  end
+
+  def play
+    return enum_for(:play) unless block_given?
+
+    buffer = []
+
+    loop do
+      buffer.push(*read_samples) if buffer.empty?
+      yield buffer.shift || 0.0
+    end
+  end
+
+  private
+
+  def read_samples
+    begin
+      stdout.read_nonblock(16)
+    rescue IO::EAGAINWaitReadable
+      ""
+    end.unpack('s*').map { |sample| sample.to_f / 32768 }
+  end
+
+  attr_reader :samples_written, :started_at, :stdin, :stdout
+end
+
 $last_failure_at = Time.now
 
 $any_noises_yet = false
@@ -430,9 +468,9 @@ $any_noises_yet = false
 $input_channel = Channel.new
 $input_channel.add_silence
 
-#filter = InfluenceFilter.new($input_channel.play, influence: 10_000)
+#filter = InfluenceFilter.new($input_channel.play, influence: 3_000)
 #filter = DraggingFilter.new($input_channel.play, change_per_second: 500)
-filter = RollingAverageFilter.new($input_channel.play, span: 1.0/8_000)
+filter = RollingAverageFilter.new($input_channel.play, span: 1.0/6_000)
 
 # with inversion, low-pass becomes high-pass
 #inversion = InversionFilter.new(filter.play)
@@ -444,13 +482,13 @@ filter_channel = Channel.new
 #filter_channel.add($input_channel.play)
 filter_channel.add($switched_filter.play)
 
-echo = TapeLoop.new(filter_channel.play, delay: 0.5823, scale: 0.5)
-reverb = TapeLoop.new(filter_channel.play, delay: 0.05812, scale: 0.412)
+echo = TapeLoop.new(filter_channel.play, delay: 0.723, scale: 0.6)
+reverb = TapeLoop.new(filter_channel.play, delay: 0.05812, scale: 0.0)
 
 $input_channel.add(echo.play)
 $input_channel.add(reverb.play)
 
-$output_enum = $input_channel.play
+$output_enum = filter_channel.play
 
 # outgoing_delay = TapeLoop.new($input_channel.play, delay: 2, scale: 0.4)
 
@@ -620,6 +658,12 @@ if ARGV[0] == "c"
   # $sound_stream
 
   binding.irb
+elsif ARGV[0] == "r"
+  $input_channel.add(RecordingStream.new.play)
+  loop do
+    $sound_stream.consume($output_enum)
+  end
+  puts "done"
 elsif ARGV.empty?
   tracker = {}
 
