@@ -247,7 +247,8 @@ end
 class Channel
   def initialize
     @splicer = SoundSplicer.new
-    @splitter = SoundSplitter.new(splicer.play.map { |sample| sample.clamp(-1,1) })
+    regulator = RegulatorFilter.new(splicer.play)
+    @splitter = SoundSplitter.new(regulator.play)
   end
 
   def add(enumerator)
@@ -289,6 +290,34 @@ class TapeLoop
   private
 
   attr_reader :feed, :index, :scale
+end
+
+class RegulatorFilter
+  def initialize(feed, duration: 1/40)
+    sample_count = duration * SAMPLE_RATE
+    @feed = feed
+    @scale = 1.0
+    @downstep = 1 - 1.0/SAMPLE_RATE
+  end
+
+  def play
+    feed.map do |sample|
+      ret = sample * scale
+      if ret > 1
+        @scale = 1 / sample
+        ret = 1.0
+      elsif scale < 1
+        @scale/= downstep
+      else
+        @scale = 1.0
+      end
+      ret
+    end
+  end
+
+  private
+
+  attr_reader :downstep, :feed, :scale
 end
 
 # Reasonably natural-sounding low-pass filter, good for echoes
@@ -468,22 +497,22 @@ $any_noises_yet = false
 $input_channel = Channel.new
 $input_channel.add_silence
 
-#filter = InfluenceFilter.new($input_channel.play, influence: 3_000)
+#filter = InfluenceFilter.new($input_channel.play, influence: 5_000)
 #filter = DraggingFilter.new($input_channel.play, change_per_second: 500)
-filter = RollingAverageFilter.new($input_channel.play, span: 1.0/6_000)
+#filter = RollingAverageFilter.new($input_channel.play, span: 1.0/3_000)
 
 # with inversion, low-pass becomes high-pass
 #inversion = InversionFilter.new(filter.play)
 
-$switched_filter = KillSwitchFilter.new(filter.play)
+#$switched_filter = KillSwitchFilter.new(filter.play)
 
 filter_channel = Channel.new
 #filter_channel.add(inversion.play)
-#filter_channel.add($input_channel.play)
-filter_channel.add($switched_filter.play)
+filter_channel.add($input_channel.play)
+#filter_channel.add($switched_filter.play)
 
-echo = TapeLoop.new(filter_channel.play, delay: 0.723, scale: 0.6)
-reverb = TapeLoop.new(filter_channel.play, delay: 0.05812, scale: 0.0)
+echo = TapeLoop.new(filter_channel.play, delay: 1.723, scale: 0.66667)
+reverb = TapeLoop.new(filter_channel.play, delay: 0.05812, scale: 0.2)
 
 $input_channel.add(echo.play)
 $input_channel.add(reverb.play)
