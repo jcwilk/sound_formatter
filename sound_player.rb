@@ -512,7 +512,9 @@ filter_channel.add($input_channel.play)
 #filter_channel.add($switched_filter.play)
 
 echo = TapeLoop.new(filter_channel.play, delay: 1.723, scale: 0.66667)
-reverb = TapeLoop.new(filter_channel.play, delay: 0.05812, scale: 0.2)
+reverb = TapeLoop.new(filter_channel.play, delay: 0.15812, scale: 0.3)
+
+# TODO: put the regulator in a different place so it's not downscaling innocent bystanders?
 
 $input_channel.add(echo.play)
 $input_channel.add(reverb.play)
