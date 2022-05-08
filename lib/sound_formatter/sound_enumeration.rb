@@ -66,6 +66,21 @@ module SoundFormatter::SoundEnumeration
       lazy.map { |sample| -sample }.match_laziness(self)
     end
 
+    def delay(seconds)
+      tape_loop = [0.0] * [(seconds.to_f * SoundFormatter::SoundEnumeration.sample_rate).floor,1].max
+      index = 0
+
+      (0...tape_loop.size).step.lazy.cycle.zip(self).map do |index, new_sample|
+        ret = tape_loop[index]
+        tape_loop[index] = new_sample
+        ret
+      end.lock.match_laziness(self)
+    end
+
+    def scale(ratio)
+      lazy.map { |sample| sample * ratio }.match_laziness(self)
+    end
+
     def match_laziness(comp)
       return self unless kind_of?(Enumerator::Lazy) ^ comp.kind_of?(Enumerator::Lazy) # they match, skip it
 

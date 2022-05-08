@@ -180,27 +180,6 @@ class Channel
   attr_reader :splicer, :splitter
 end
 
-class TapeLoop
-  def initialize(feed, delay:, scale:)
-    @loop = [0.0] * [(delay * SAMPLE_RATE).floor,1].max
-    @feed = feed
-    @scale = scale
-    @index = 0
-  end
-
-  def play
-    (0...@loop.size).step.lazy.cycle.zip(feed).map do |index, new_sample|
-      ret = @loop[index]
-      @loop[index] = new_sample * scale
-      ret
-    end.lock
-  end
-
-  private
-
-  attr_reader :feed, :index, :scale
-end
-
 # Reasonably natural-sounding low-pass filter, good for echoes
 # AKA Simple Moving Average
 class RollingAverageFilter
