@@ -201,34 +201,6 @@ class TapeLoop
   attr_reader :feed, :index, :scale
 end
 
-class RegulatorFilter
-  def initialize(feed, duration: 1/40)
-    sample_count = duration * SAMPLE_RATE
-    @feed = feed
-    @scale = 1.0
-    @downstep = 1 - 1.0/SAMPLE_RATE
-  end
-
-  def play
-    feed.map do |sample|
-      ret = sample * scale
-      if ret > 1
-        @scale = 1 / sample
-        ret = 1.0
-      elsif scale < 1
-        @scale/= downstep
-      else
-        @scale = 1.0
-      end
-      ret
-    end
-  end
-
-  private
-
-  attr_reader :downstep, :feed, :scale
-end
-
 # Reasonably natural-sounding low-pass filter, good for echoes
 # AKA Simple Moving Average
 class RollingAverageFilter
