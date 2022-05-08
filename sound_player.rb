@@ -108,12 +108,12 @@ $any_noises_yet = false
 
 
 
-
+using SoundFormatter::SoundEnumeration
 
 $input_channel = Channel.new
 $input_channel.add_silence
 
-filter = InfluenceFilter.new($input_channel.play, influence: 5_000)
+#filter = InfluenceFilter.new($input_channel.play, influence: 5_000)
 #filter = DraggingFilter.new($input_channel.play, change_per_second: 500)
 #filter = RollingAverageFilter.new($input_channel.play, span: 1.0/3_000)
 
@@ -126,7 +126,7 @@ filter_channel = Channel.new
 #filter_channel.add(inversion.play)
 #filter_channel.add($input_channel.play)
 #filter_channel.add($switched_filter.play)
-filter_channel.add(filter.play)
+filter_channel.add($input_channel.play.ema_low_pass(influence: 5_000))
 
 echo = TapeLoop.new(filter_channel.play, delay: 1.723, scale: 0.66667)
 reverb = TapeLoop.new(filter_channel.play, delay: 0.15812, scale: 0.3)

@@ -50,6 +50,18 @@ module SoundFormatter::SoundEnumeration
       end.match_laziness(self)
     end
 
+    # Kind of a watered-down low-pass filter that has less extreme a difference in its effect between lower and higher frequencies
+    # A possible benefit is that it doesn't color the sound very much, it doesn't "sound" like a filter even though it does affecthigher frequencies more
+    # Finding the right `influence` level here is a bit tricky too since it's hard to hear exactly where the threshold is
+    def ema_low_pass(influence:)
+      normalized_influence = [influence.to_f / SoundFormatter::SoundEnumeration.sample_rate,1.0].min
+      value = 0.0
+
+      lazy.map do |sample|
+        value += (sample - value) * normalized_influence
+      end.match_laziness(self)
+    end
+
     def match_laziness(comp)
       return self unless kind_of?(Enumerator::Lazy) ^ comp.kind_of?(Enumerator::Lazy) # they match, skip it
 
