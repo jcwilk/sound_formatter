@@ -242,21 +242,6 @@ class DraggingFilter
   attr_reader :feed, :max_change, :value
 end
 
-# Useful for turning low-pass filters into high-pass filters
-class InversionFilter
-  def initialize(feed)
-    @feed = feed
-  end
-
-  def play
-    feed.map { |sample| -sample }
-  end
-
-  private
-
-  attr_reader :feed
-end
-
 class SoundStream
   def initialize
     args = %w[play -q -t raw -b 32 -r] + [SAMPLE_RATE.to_s] + %w[-c 1 -e floating-point --endian little - -t alsa]

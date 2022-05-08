@@ -62,6 +62,10 @@ module SoundFormatter::SoundEnumeration
       end.match_laziness(self)
     end
 
+    def invert
+      lazy.map { |sample| -sample }.match_laziness(self)
+    end
+
     def match_laziness(comp)
       return self unless kind_of?(Enumerator::Lazy) ^ comp.kind_of?(Enumerator::Lazy) # they match, skip it
 

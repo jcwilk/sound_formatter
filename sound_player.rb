@@ -123,7 +123,6 @@ $input_channel.add_silence
 #$switched_filter = KillSwitchFilter.new(filter.play)
 
 filter_channel = Channel.new
-#filter_channel.add(inversion.play)
 #filter_channel.add($input_channel.play)
 #filter_channel.add($switched_filter.play)
 filter_channel.add($input_channel.play.ema_low_pass(influence: 5_000))
