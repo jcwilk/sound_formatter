@@ -132,7 +132,7 @@ filter_channel.add($input_channel.play.ema_low_pass(influence: 5_000))
 $input_channel.add filter_channel.play.delay(1.723).scale(0.66667)
 $input_channel.add filter_channel.play.delay(0.15812).scale(0.3)
 
-$output_enum = filter_channel.play
+$output_enum = $input_channel.play
 
 # outgoing_delay = TapeLoop.new($input_channel.play, delay: 2, scale: 0.4)
 
