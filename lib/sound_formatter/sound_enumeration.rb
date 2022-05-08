@@ -8,7 +8,21 @@ module SoundFormatter::SoundEnumeration
         loop do
           y << source.next
         end
-      end.lazy
+      end.match_laziness(self)
+    end
+
+    def then(enum = false, &block)
+      enums = []
+      enums.push(enum) if enum
+      enums.push(Enumerator.new { block.call }) if block_given?
+
+      raise ArgumentError, "No behavior given to #then!" if enums.empty?
+
+      chain(*enums).match_laziness(self)
+    end
+
+    def match_laziness(comp)
+      comp.kind_of?(Enumerator::Lazy) ? lazy : self
     end
   end
 end

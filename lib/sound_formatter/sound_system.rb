@@ -101,14 +101,12 @@ class SoundSplicer
   def add(enumerator)
     uuid = SecureRandom.uuid
     active_enumerators_store[uuid] = enumerator
-      .chain(
-        Enumerator.new do
-          active_enumerators_store.delete(uuid)
-          @active_enumerators = active_enumerators_store.values
-        end
-      ).chain(
+      .then {
+        active_enumerators_store.delete(uuid)
+        @active_enumerators = active_enumerators_store.values
+      }.chain(
         0.0.step(by: 0)
-      ).each
+      ).lazy
     @active_enumerators = active_enumerators_store.values
   end
 
