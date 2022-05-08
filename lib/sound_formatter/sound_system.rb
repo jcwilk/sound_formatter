@@ -11,7 +11,7 @@ class TimedSoundEnumerator
     step = 1.0 / SAMPLE_RATE
     sample_count = (duration * SAMPLE_RATE).floor
 
-    base_enum = 0.0.step(by: step).with_index.lock
+    base_enum = 0.0.step(by: step).lazy.with_index.lock
 
     if sample_count <= FADE_FILTER_LENGTH
       @raw_enum = 0.0.step(by: step).lazy.take(sample_count)
