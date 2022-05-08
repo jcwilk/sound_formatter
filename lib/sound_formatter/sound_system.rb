@@ -157,8 +157,7 @@ end
 class Channel
   def initialize
     @splicer = SoundSplicer.new
-    regulator = RegulatorFilter.new(splicer.play)
-    @splitter = SoundSplitter.new(regulator.play)
+    @splitter = SoundSplitter.new(splicer.play.regulate)
   end
 
   def add(enumerator)
