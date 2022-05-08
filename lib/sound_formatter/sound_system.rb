@@ -11,7 +11,7 @@ class TimedSoundEnumerator
     step = 1.0 / SAMPLE_RATE
     sample_count = (duration * SAMPLE_RATE).floor
 
-    base_enum = 0.0.step(by: step).lazy.with_index.lock
+    base_enum = 0.0.step(by: step).with_index.lock
 
     if sample_count <= FADE_FILTER_LENGTH
       @raw_enum = 0.0.step(by: step).lazy.take(sample_count)
@@ -58,7 +58,7 @@ class DurationFilter
   def initialize(enumerator, sample_count:)
     #sample_count = (duration * SAMPLE_RATE).floor
     if sample_count < FADE_FILTER_LENGTH
-      @enum = 0.0.step(by: 0).lazy.take(sample_count)
+      @enum = Enumerator.produce { 0.0 }.lazy.take(sample_count)
       return
     end
 
@@ -76,7 +76,7 @@ end
 class ControlledSoundEnumerator
   def initialize(&block)
     step = 1.0 / SAMPLE_RATE
-    @raw_enum = 0.0.step(by: step).lazy.with_index.lock.map do |s, i|
+    @raw_enum = Enumerator.produce { 0.0 }.with_index.lock.map do |s, i|
       fade_in(i, FADE_FILTER_LENGTH) * block.call(s, i)
     end
     @killswitch = KillSwitchFilter.new(@raw_enum)
