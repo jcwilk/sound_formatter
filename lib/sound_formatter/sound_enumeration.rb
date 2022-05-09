@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "./sound_splicer"
+
 module SoundFormatter::SoundEnumeration
   DEFAULT_SAMPLE_RATE = 41_000
 
@@ -21,7 +23,7 @@ module SoundFormatter::SoundEnumeration
       end.match_laziness(self)
     end
 
-    def then(enum = false, &block)
+    def after(enum = false, &block)
       enums = []
       enums.push(enum) if enum
       enums.push(Enumerator.new { block.call }) if block_given?
@@ -79,6 +81,10 @@ module SoundFormatter::SoundEnumeration
 
     def scale(ratio)
       lazy.map { |sample| sample * ratio }.match_laziness(self)
+    end
+
+    def splice(enumerator)
+      SoundFormatter::SoundSplicer.new.tap { |splicer| splicer.splice(enumerator) }
     end
 
     def match_laziness(comp)

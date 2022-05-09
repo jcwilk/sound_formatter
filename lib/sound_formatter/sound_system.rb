@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative './sound_enumeration'
+#require_relative './sound_enumeration'
 
 using SoundFormatter::SoundEnumeration
 
@@ -92,37 +92,6 @@ class ControlledSoundEnumerator
   end
 end
 
-class SoundSplicer
-  def initialize
-    @active_enumerators_store = {}
-    @active_enumerators = [] # This is to avoid creating an array via Hash#values more than we need to
-  end
-
-  def add(enumerator)
-    uuid = SecureRandom.uuid
-    active_enumerators_store[uuid] = enumerator
-      .then {
-        active_enumerators_store.delete(uuid)
-        @active_enumerators = active_enumerators_store.values
-      }.chain(
-        0.0.step(by: 0)
-      ).lazy
-    @active_enumerators = active_enumerators_store.values
-  end
-
-  def play
-    Enumerator.new do |y|
-      while(!active_enumerators.empty?) do
-        y << active_enumerators.sum(0.0, &:next)
-      end
-    end.lazy
-  end
-
-  private
-
-  attr_reader :active_enumerators, :active_enumerators_store
-end
-
 class SoundSplitter
   def initialize(enumerator)
     @enumerator = enumerator
@@ -156,19 +125,19 @@ end
 
 class Channel
   def initialize
-    @splicer = SoundSplicer.new
-    @splitter = SoundSplitter.new(splicer.play.regulate)
+    @splicer = SoundFormatter::SoundSplicer.new
+    @splitter = SoundSplitter.new(splicer.regulate)
   end
 
   def add(enumerator)
-    splicer.add(enumerator)
+    splicer.splice(enumerator)
   end
 
   # This adds an infinite silent enumerator so if it has nothing to play it will keep playing silence
   # Without this, the channel will stop generating samples and the sound stream buffer will underrun
   # If you *do* want the channel to auto-remove itself from other splicers/channels then don't call this
   def add_silence
-    splicer.add(0.0.step(by: 0).lazy)
+    splicer.splice(0.0.step(by: 0).lazy)
   end
 
   def play
