@@ -27,6 +27,10 @@ class SoundFormatter::SoundSplicer
     enum.each(&block)
   end
 
+  def next
+    active_enum.next
+  end
+
   private
 
   def rebuild

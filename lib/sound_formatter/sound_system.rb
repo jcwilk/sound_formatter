@@ -21,7 +21,7 @@ class TimedSoundEnumerator
     fading_in = base_enum.take(FADE_FILTER_LENGTH).map { |s, i| fade_in(i, FADE_FILTER_LENGTH) * block.call(s, i) }
     vanilla = base_enum.take(sample_count - FADE_FILTER_LENGTH).map(&block)
 
-    @raw_enum = DurationFilter.new(fading_in.chain(vanilla).lazy, sample_count: sample_count).play
+    @raw_enum = DurationFilter.new(fading_in.chain(vanilla).lazy.lock, sample_count: sample_count).play
   end
 
   def play
@@ -90,32 +90,6 @@ class ControlledSoundEnumerator
   def end
     @killswitch.end
   end
-end
-
-class Channel
-  def initialize
-    @splicer = Enumerator.new {}.splice
-    @splitter = splicer.regulate
-  end
-
-  def add(enumerator)
-    splicer.splice(enumerator)
-  end
-
-  # This adds an infinite silent enumerator so if it has nothing to play it will keep playing silence
-  # Without this, the channel will stop generating samples and the sound stream buffer will underrun
-  # If you *do* want the channel to auto-remove itself from other splicers/channels then don't call this
-  def add_silence
-    splicer.splice(0.0.step(by: 0).lazy)
-  end
-
-  def play
-    splitter.split
-  end
-
-  private
-
-  attr_reader :splicer, :splitter
 end
 
 # Reasonably natural-sounding low-pass filter, good for echoes

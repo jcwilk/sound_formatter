@@ -110,84 +110,20 @@ $any_noises_yet = false
 
 using SoundFormatter::SoundEnumeration
 
-$input_channel = Channel.new
-$input_channel.add_silence
+$input_channel = Enumerator.produce { 0.0 }.splice
+regulated_input = $input_channel.lazy.regulate
 
-#filter = InfluenceFilter.new($input_channel.play, influence: 5_000)
-#filter = DraggingFilter.new($input_channel.play, change_per_second: 500)
-#filter = RollingAverageFilter.new($input_channel.play, span: 1.0/3_000)
+filter_channel = regulated_input.split.ema_low_pass(influence: 5_000)
 
-# with inversion, low-pass becomes high-pass
-#inversion = InversionFilter.new(filter.play)
+$input_channel.splice filter_channel.split.delay(1.723).scale(0.66667)
+$input_channel.splice filter_channel.split.delay(0.15812).scale(0.3)
 
-#$switched_filter = KillSwitchFilter.new(filter.play)
-
-filter_channel = Channel.new
-#filter_channel.add($input_channel.play)
-#filter_channel.add($switched_filter.play)
-filter_channel.add($input_channel.play.ema_low_pass(influence: 5_000))
-
-# TODO: put the regulator in a different place so it's not downscaling innocent bystanders?
-
-$input_channel.add filter_channel.play.delay(1.723).scale(0.66667)
-$input_channel.add filter_channel.play.delay(0.15812).scale(0.3)
-
-$output_enum = $input_channel.play
-
-# outgoing_delay = TapeLoop.new($input_channel.play, delay: 2, scale: 0.4)
-
-# distant_channel = Channel.new
-# distant_channel.add(outgoing_delay.play)
-
-# distand_reverb = TapeLoop.new(distant_channel.play, delay: 0.05, scale: 0.6)
-# distant_channel.add(distand_reverb.play)
-
-# incoming_delay = TapeLoop.new(distant_channel.play, delay: 2, scale: 1.4)
-# $input_channel.add(incoming_delay.play)
-
-# $output_enum = $input_channel.play
-
-
-
-
-
-# long_tape_input_channel = Channel.new
-# long_tape_input_channel.add($input_channel.play)
-
-# long_tape_output_channel = Channel.new
-# #long_tape_input_channel.add(long_tape_output_channel.play)
-
-# long_tape_loop = TapeLoop.new(long_tape_input_channel.play, delay: 2, scale: 0.4)
-# long_tape_output_channel.add(long_tape_loop.play)
-
-
-
-# # long_tape_output_channel.add($input_channel.play)
-# # long_tape_loop = TapeLoop.new(long_tape_output_channel.add_output_feed, delay: 5, scale: 0.6)
-# # long_tape_output_channel.add(long_tape_loop.play)
-
-# short_tape_channel = Channel.new
-# short_tape_channel.add(long_tape_output_channel.play)
-
-# short_tape_loop = TapeLoop.new(short_tape_channel.play, delay: 0.1, scale: 0.5)
-# short_tape_channel.add(short_tape_loop.play)
-
-# long_tape_input_channel.add(short_tape_channel.play)
-
-# #$input_channel.add($input_channel.add_output_feed)
-# #tape_loop = TapeLoop.new($input_channel.add_output_feed, delay: REVERB_DELAY, scale: 0.6)
-# #$input_channel.add(tape_loop.play)
-
-# $output_channel = Channel.new
-# $output_channel.add(short_tape_channel.play)
-# $output_channel.add($input_channel.play)
-
-# $output_enum = $output_channel.play
+$output_enum = regulated_input.split
 
 $sound_stream = SoundStream.new
 
 def play(duration = 1, &block)
-  $input_channel.add(TimedSoundEnumerator.new(duration, &block).play)
+  $input_channel.splice(TimedSoundEnumerator.new(duration, &block).play)
 end
 
 def white(str)
