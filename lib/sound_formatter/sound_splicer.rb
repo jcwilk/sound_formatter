@@ -22,7 +22,7 @@ class SoundFormatter::SoundSplicer
       loop { y << active_enum.next }
     end
 
-    return enum unless block_given?
+    return enum.lazy unless block_given?
 
     enum.each(&block)
   end

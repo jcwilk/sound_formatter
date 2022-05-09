@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "./sound_splicer"
+require_relative "./sound_splitter"
 
 module SoundFormatter::SoundEnumeration
   DEFAULT_SAMPLE_RATE = 41_000
@@ -83,8 +84,17 @@ module SoundFormatter::SoundEnumeration
       lazy.map { |sample| sample * ratio }.match_laziness(self)
     end
 
-    def splice(enumerator)
-      SoundFormatter::SoundSplicer.new.tap { |splicer| splicer.splice(enumerator) }
+    def splice(enumerator = false)
+      SoundFormatter::SoundSplicer.new.tap do |splicer|
+        splicer.splice(self)
+        splicer.splice(enumerator) if enumerator
+      end
+    end
+
+    def split
+      @splitter||= SoundFormatter::SoundSplitter.new(self)
+
+      @splitter.split
     end
 
     def match_laziness(comp)

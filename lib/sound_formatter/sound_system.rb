@@ -92,41 +92,10 @@ class ControlledSoundEnumerator
   end
 end
 
-class SoundSplitter
-  def initialize(enumerator)
-    @enumerator = enumerator
-    @index = 0
-    @last_value = 0.0
-  end
-
-  def play
-    # Possible bug with requiring this to be -1, if set to 0 it triggers a "double resume (FiberError)" - this may be a hint
-    # that one of these mechanisms is trying to start enumerating before it's supposed to... but just something to keep in mind,
-    # it's still working fine if started at -1 and the only consequence is a possible extra sample of silence at the beginning :shrug:
-    our_index = -1
-    Enumerator.new do |y|
-      loop do
-        y << if our_index == @index
-            (@last_value = enumerator.next).tap do
-              our_index = (@index += 1)
-            end
-          else
-            our_index = @index
-            @last_value
-          end
-      end
-    end.lazy
-  end
-
-  private
-
-  attr_reader :enumerator, :index
-end
-
 class Channel
   def initialize
-    @splicer = SoundFormatter::SoundSplicer.new
-    @splitter = SoundSplitter.new(splicer.regulate)
+    @splicer = Enumerator.new {}.splice
+    @splitter = splicer.regulate
   end
 
   def add(enumerator)
@@ -141,7 +110,7 @@ class Channel
   end
 
   def play
-    splitter.play
+    splitter.split
   end
 
   private
